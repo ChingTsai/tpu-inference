@@ -624,6 +624,13 @@ class DPScheduler(SchedulerInterface):
         # Cache scheduler outputs to use in `update_from_output`
         self.cached_schedulers_output.append(rank_outputs)
 
+        # Log request distribution every 50 steps
+        if self._schedule_step_count % 50 == 0:
+            counts = [0] * self.dp_size
+            for r in self.assigned_dp_rank.values():
+                counts[r] += 1
+            logger.info(f"DP Rank Request Distribution: {counts}")
+
         # Return combined scheduler outputs
         combined_output = self._combine_scheduler_outputs(rank_outputs)
 
