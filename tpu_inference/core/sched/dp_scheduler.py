@@ -552,19 +552,22 @@ class DPScheduler(SchedulerInterface):
             self._send_command(rank, SchedulerCommand.PROBE_COMPUTED_BLOCKS,
                                request)
 
-        best_cache_rank = None
+        best_cache_ranks = []
         best_cache_tokens = 0
         for rank in range(self.dp_size):
             cached_tokens = self._get_result(
                 rank, SchedulerCommand.PROBE_COMPUTED_BLOCKS)
             if cached_tokens > best_cache_tokens:
                 best_cache_tokens = cached_tokens
-                best_cache_rank = rank
+                best_cache_ranks = [rank]
+            elif cached_tokens == best_cache_tokens and cached_tokens > 0:
+                best_cache_ranks.append(rank)
 
         # Find rank with least tokens
         selected_rank = min(rank_tokens, key=rank_tokens.get)
 
         if best_cache_tokens > 0:
+            best_cache_rank = min(best_cache_ranks, key=rank_tokens.get)
             # Only route to the cache hit rank if it's not significantly more loaded
             if rank_tokens[best_cache_rank] - rank_tokens[selected_rank] < 8192:
                 return best_cache_rank
