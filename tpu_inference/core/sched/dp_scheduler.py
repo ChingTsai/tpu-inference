@@ -357,6 +357,9 @@ class DPScheduler(SchedulerInterface):
         self.dp_size = vllm_config.sharding_config.total_dp_size
         self.assigned_dp_rank: Dict[str, int] = {}  # req_id -> dp_rank
         self.req_id_to_prompt_hash: Dict[str, int] = {}  # req_id -> prompt_hash
+        self.cumulative_prompts_per_rank: List[set[int]] = [
+            set() for _ in range(self.dp_size)
+        ]
         self.cached_schedulers_output = deque()
         self._create_per_rank_configs(kv_cache_config)
         self._schedule_step_count = 0
@@ -546,7 +549,11 @@ class DPScheduler(SchedulerInterface):
 
     def _find_best_rank_for_request(self, request: Request) -> int:
         """Find the best DP rank for a new request based on load balancing."""
-        rank_tokens = self._get_rank_token_counts()
+        # Get active request counts from our tracking
+        active_counts = [0] * self.dp_size
+        for r in self.assigned_dp_rank.values():
+            active_counts[r] += 1
+        max_seqs = self.vllm_config.scheduler_config.max_num_seqs
 
         # First, try to find a rank with prefix cache hit.
         for rank in range(self.dp_size):
@@ -564,16 +571,16 @@ class DPScheduler(SchedulerInterface):
             elif cached_tokens == best_cache_tokens and cached_tokens > 0:
                 best_cache_ranks.append(rank)
 
-        # Find rank with least tokens
-        selected_rank = min(rank_tokens, key=rank_tokens.get)
-
         if best_cache_tokens > 0:
-            best_cache_rank = min(best_cache_ranks, key=rank_tokens.get)
-            # Only route to the cache hit rank if it's not significantly more loaded
-            if rank_tokens[best_cache_rank] - rank_tokens[selected_rank] < 8192:
+            # Pick the best cache rank with the lowest active count
+            best_cache_rank = min(best_cache_ranks,
+                                  key=lambda r: active_counts[r])
+            # Only route away if the best cache rank is already at capacity
+            if active_counts[best_cache_rank] < max_seqs:
                 return best_cache_rank
 
-        return selected_rank
+        # Fallback: find rank with least active requests
+        return min(range(self.dp_size), key=lambda r: active_counts[r])
 
     def add_request(self, request: Request) -> None:
         """
@@ -590,8 +597,9 @@ class DPScheduler(SchedulerInterface):
         rank = self._find_best_rank_for_request(request)
         self.assigned_dp_rank[request.request_id] = rank
         # Use prompt_token_ids to uniquely identify the prompt
-        self.req_id_to_prompt_hash[request.request_id] = hash(
-            tuple(request.prompt_token_ids))
+        prompt_hash = hash(tuple(request.prompt_token_ids))
+        self.req_id_to_prompt_hash[request.request_id] = prompt_hash
+        self.cumulative_prompts_per_rank[rank].add(prompt_hash)
 
         self._send_command(rank, SchedulerCommand.ADD_REQUEST, request)
         self._get_result(rank, SchedulerCommand.ADD_REQUEST)
@@ -631,15 +639,14 @@ class DPScheduler(SchedulerInterface):
         # Log request and distinct prompt distribution every 50 steps
         if self._schedule_step_count % 50 == 0:
             req_counts = [0] * self.dp_size
-            prompt_sets = [set() for _ in range(self.dp_size)]
-            for req_id, rank in self.assigned_dp_rank.items():
-                req_counts[rank] += 1
-                if req_id in self.req_id_to_prompt_hash:
-                    prompt_sets[rank].add(self.req_id_to_prompt_hash[req_id])
+            for r in self.assigned_dp_rank.values():
+                req_counts[r] += 1
             
-            prompt_counts = [len(s) for s in prompt_sets]
-            logger.info(f"DP Rank Distribution: Requests={req_counts}, "
-                        f"Distinct Prompts={prompt_counts}")
+            cumulative_prompt_counts = [
+                len(s) for s in self.cumulative_prompts_per_rank
+            ]
+            logger.info(f"DP Rank Distribution: Active Requests={req_counts}, "
+                        f"Cumulative Distinct Prompts={cumulative_prompt_counts}")
 
         # Return combined scheduler outputs
         combined_output = self._combine_scheduler_outputs(rank_outputs)
@@ -1005,8 +1012,6 @@ class DPScheduler(SchedulerInterface):
         for req_id in finished_req_ids:
             if req_id in self.assigned_dp_rank:
                 del self.assigned_dp_rank[req_id]
-            if req_id in self.req_id_to_prompt_hash:
-                del self.req_id_to_prompt_hash[req_id]
 
     def finish_requests(self, request_ids, finished_status) -> None:
         """Forward request finish signals to the appropriate DP rank schedulers."""
