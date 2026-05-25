@@ -1,0 +1,14 @@
+🎯 目標平均 Running 數量: 120
+⏳ 準備就緒，先等待 15 秒...
+▶️ 開始監控 vLLM metrics (共 1 分鐘，每 10 秒抓取一次)...
+--------------------------------------------------------
+[1/6] Running: 126 | Waiting: 2 | KV Cache: 18.68% | Prefix Cache Hit Rate: 57.63%
+[2/6] Running: 126 | Waiting: 2 | KV Cache: 20.84% | Prefix Cache Hit Rate: 58.87%
+[3/6] Running: 126 | Waiting: 2 | KV Cache: 23.83% | Prefix Cache Hit Rate: 60.19%
+[4/6] Running: 123 | Waiting: 2 | KV Cache: 21.48% | Prefix Cache Hit Rate: 61.48%
+[5/6] Running: 123 | Waiting: 5 | KV Cache: 20.10% | Prefix Cache Hit Rate: 62.47%
+[6/6] Running: 126 | Waiting: 2 | KV Cache: 22.54% | Prefix Cache Hit Rate: 63.35%
+--------------------------------------------------------
+👉 1 分鐘內的實際平均 Running requests: 125.00
+--------------------------------------------------------
+✅ 成功：實際平均 (125.00) 已達標 (>= 120)！

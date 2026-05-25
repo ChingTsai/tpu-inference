@@ -560,11 +560,15 @@ class DPScheduler(SchedulerInterface):
             if cached_tokens > best_cache_tokens:
                 best_cache_tokens = cached_tokens
                 best_cache_rank = rank
-        if best_cache_tokens > 0:
-            return best_cache_rank
 
-        # Otherwise, find rank with least tokens
+        # Find rank with least tokens
         selected_rank = min(rank_tokens, key=rank_tokens.get)
+
+        if best_cache_tokens > 0:
+            # Only route to the cache hit rank if it's not significantly more loaded
+            if rank_tokens[best_cache_rank] - rank_tokens[selected_rank] < 8192:
+                return best_cache_rank
+
         return selected_rank
 
     def add_request(self, request: Request) -> None:
