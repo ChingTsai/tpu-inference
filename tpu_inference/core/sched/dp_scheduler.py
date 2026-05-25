@@ -356,6 +356,7 @@ class DPScheduler(SchedulerInterface):
         # DP state
         self.dp_size = vllm_config.sharding_config.total_dp_size
         self.assigned_dp_rank: Dict[str, int] = {}  # req_id -> dp_rank
+        self.req_id_to_prompt_hash: Dict[str, int] = {}  # req_id -> prompt_hash
         self.cached_schedulers_output = deque()
         self._create_per_rank_configs(kv_cache_config)
         self._schedule_step_count = 0
@@ -588,6 +589,9 @@ class DPScheduler(SchedulerInterface):
             f"assigned to rank {self.assigned_dp_rank[request.request_id]})")
         rank = self._find_best_rank_for_request(request)
         self.assigned_dp_rank[request.request_id] = rank
+        # Use prompt_token_ids to uniquely identify the prompt
+        self.req_id_to_prompt_hash[request.request_id] = hash(
+            tuple(request.prompt_token_ids))
 
         self._send_command(rank, SchedulerCommand.ADD_REQUEST, request)
         self._get_result(rank, SchedulerCommand.ADD_REQUEST)
@@ -624,12 +628,18 @@ class DPScheduler(SchedulerInterface):
         # Cache scheduler outputs to use in `update_from_output`
         self.cached_schedulers_output.append(rank_outputs)
 
-        # Log request distribution every 50 steps
+        # Log request and distinct prompt distribution every 50 steps
         if self._schedule_step_count % 50 == 0:
-            counts = [0] * self.dp_size
-            for r in self.assigned_dp_rank.values():
-                counts[r] += 1
-            logger.info(f"DP Rank Request Distribution: {counts}")
+            req_counts = [0] * self.dp_size
+            prompt_sets = [set() for _ in range(self.dp_size)]
+            for req_id, rank in self.assigned_dp_rank.items():
+                req_counts[rank] += 1
+                if req_id in self.req_id_to_prompt_hash:
+                    prompt_sets[rank].add(self.req_id_to_prompt_hash[req_id])
+            
+            prompt_counts = [len(s) for s in prompt_sets]
+            logger.info(f"DP Rank Distribution: Requests={req_counts}, "
+                        f"Distinct Prompts={prompt_counts}")
 
         # Return combined scheduler outputs
         combined_output = self._combine_scheduler_outputs(rank_outputs)
@@ -995,6 +1005,8 @@ class DPScheduler(SchedulerInterface):
         for req_id in finished_req_ids:
             if req_id in self.assigned_dp_rank:
                 del self.assigned_dp_rank[req_id]
+            if req_id in self.req_id_to_prompt_hash:
+                del self.req_id_to_prompt_hash[req_id]
 
     def finish_requests(self, request_ids, finished_status) -> None:
         """Forward request finish signals to the appropriate DP rank schedulers."""
