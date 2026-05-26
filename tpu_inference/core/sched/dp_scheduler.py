@@ -360,6 +360,7 @@ class DPScheduler(SchedulerInterface):
         self.cumulative_prompts_per_rank: List[set[int]] = [
             set() for _ in range(self.dp_size)
         ]
+        self.num_spilled_requests = 0
         self.cached_schedulers_output = deque()
         self._create_per_rank_configs(kv_cache_config)
         self._schedule_step_count = 0
