@@ -549,14 +549,21 @@ class DPScheduler(SchedulerInterface):
         return rank_tokens
 
     def _find_best_rank_for_request(self, request: Request) -> int:
-        """Find the best DP rank for a new request based on cache hits and load."""
+        """Find the best DP rank for a new request based on stickiness, hits, and load."""
+        prompt_hash = hash(tuple(request.prompt_token_ids))
+        
+        # 1. Enforce stickiness: if prompt was already processed by a rank, keep it there.
+        # This ignores the max_seqs limit to ensure the prefix cache is fully utilized.
+        for rank, owned_prompts in enumerate(self.cumulative_prompts_per_rank):
+            if prompt_hash in owned_prompts:
+                return rank
+
         active_counts = [0] * self.dp_size
         for r in self.assigned_dp_rank.values():
             active_counts[r] += 1
-
         max_seqs = self.vllm_config.scheduler_config.max_num_seqs
 
-        # 1. Probe all ranks for cached tokens
+        # 2. Probe all ranks for cached tokens for new prompts.
         for rank in range(self.dp_size):
             self._send_command(rank, SchedulerCommand.PROBE_COMPUTED_BLOCKS,
                                request)
@@ -570,12 +577,12 @@ class DPScheduler(SchedulerInterface):
         # Sort by cached tokens descending (most hits first)
         rank_hits.sort(key=lambda x: x[0], reverse=True)
 
-        # 2. Try to find a rank with hits that isn't full
+        # 3. Try to find a rank with hits that isn't full
         for num_tokens, rank in rank_hits:
             if num_tokens > 0 and active_counts[rank] < max_seqs:
                 return rank
 
-        # 3. Fallback: pick the rank with the least active requests
+        # 4. Fallback: pick the rank with the least active requests
         self.num_spilled_requests += 1
         return min(range(self.dp_size), key=lambda r: active_counts[r])
 
