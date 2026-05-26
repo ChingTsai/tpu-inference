@@ -549,7 +549,7 @@ class DPScheduler(SchedulerInterface):
         return rank_tokens
 
     def _find_best_rank_for_request(self, request: Request) -> int:
-        """Find the best DP rank for a new request based on stickiness, hits, and load."""
+        """Find the best DP rank for a new request based on stickiness, hits, and distinct request load."""
         prompt_hash = hash(tuple(request.prompt_token_ids))
         
         # 1. Enforce stickiness: if prompt was already processed by a rank, keep it there.
@@ -561,6 +561,8 @@ class DPScheduler(SchedulerInterface):
         active_counts = [0] * self.dp_size
         for r in self.assigned_dp_rank.values():
             active_counts[r] += 1
+            
+        distinct_counts = [len(prompts) for prompts in self.cumulative_prompts_per_rank]
         max_seqs = self.vllm_config.scheduler_config.max_num_seqs
 
         # 2. Probe all ranks for cached tokens for new prompts.
@@ -577,9 +579,9 @@ class DPScheduler(SchedulerInterface):
         # Sort by cached tokens descending (most hits first)
         rank_hits.sort(key=lambda x: x[0], reverse=True)
 
-        # 3. Try to find a rank with hits that isn't full
+        # 3. Try to find a rank with hits that isn't full based on distinct requests
         for num_tokens, rank in rank_hits:
-            if num_tokens > 0 and active_counts[rank] < max_seqs:
+            if num_tokens > 0 and distinct_counts[rank] <= max_seqs:
                 return rank
 
         # 4. Fallback: pick the rank with the least active requests
