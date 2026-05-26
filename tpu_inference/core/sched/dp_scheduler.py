@@ -549,7 +549,7 @@ class DPScheduler(SchedulerInterface):
         return rank_tokens
 
     def _find_best_rank_for_request(self, request: Request) -> int:
-        """Find the best DP rank for a new request based on stickiness, hits, and distinct request load."""
+        """Find the best DP rank for a new request based on stickiness, hits, and distinct load."""
         prompt_hash = hash(tuple(request.prompt_token_ids))
         
         # 1. Enforce stickiness: if prompt was already processed by a rank, keep it there.
@@ -576,17 +576,17 @@ class DPScheduler(SchedulerInterface):
                 rank, SchedulerCommand.PROBE_COMPUTED_BLOCKS)
             rank_hits.append((num_cached_tokens, rank))
 
-        # Sort by cached tokens descending (most hits first)
-        rank_hits.sort(key=lambda x: x[0], reverse=True)
+        # Sort by cached tokens descending, then by distinct counts ascending to balance load
+        rank_hits.sort(key=lambda x: (x[0], -distinct_counts[x[1]]), reverse=True)
 
         # 3. Try to find a rank with hits that isn't full based on distinct requests
         for num_tokens, rank in rank_hits:
-            if num_tokens > 0 and distinct_counts[rank] <= max_seqs:
+            if num_tokens > 0 and distinct_counts[rank] < max_seqs:
                 return rank
 
-        # 4. Fallback: pick the rank with the least active requests
+        # 4. Fallback: pick the rank with the least active requests, then least distinct prompts
         self.num_spilled_requests += 1
-        return min(range(self.dp_size), key=lambda r: active_counts[r])
+        return min(range(self.dp_size), key=lambda r: (active_counts[r], distinct_counts[r]))
 
     def add_request(self, request: Request) -> None:
         """
