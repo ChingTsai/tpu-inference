@@ -548,38 +548,34 @@ class DPScheduler(SchedulerInterface):
         return rank_tokens
 
     def _find_best_rank_for_request(self, request: Request) -> int:
-        """Find the best DP rank for a new request based on load balancing."""
-        # Get active request counts from our tracking
+        """Find the best DP rank for a new request based on cache hits and load."""
         active_counts = [0] * self.dp_size
         for r in self.assigned_dp_rank.values():
             active_counts[r] += 1
+
         max_seqs = self.vllm_config.scheduler_config.max_num_seqs
 
-        # First, try to find a rank with prefix cache hit.
+        # 1. Probe all ranks for cached tokens
         for rank in range(self.dp_size):
             self._send_command(rank, SchedulerCommand.PROBE_COMPUTED_BLOCKS,
                                request)
 
-        best_cache_ranks = []
-        best_cache_tokens = 0
+        rank_hits = []
         for rank in range(self.dp_size):
-            cached_tokens = self._get_result(
+            num_cached_tokens = self._get_result(
                 rank, SchedulerCommand.PROBE_COMPUTED_BLOCKS)
-            if cached_tokens > best_cache_tokens:
-                best_cache_tokens = cached_tokens
-                best_cache_ranks = [rank]
-            elif cached_tokens == best_cache_tokens and cached_tokens > 0:
-                best_cache_ranks.append(rank)
+            rank_hits.append((num_cached_tokens, rank))
 
-        if best_cache_tokens > 0:
-            # Pick the best cache rank with the lowest active count
-            best_cache_rank = min(best_cache_ranks,
-                                  key=lambda r: active_counts[r])
-            # Only route away if the best cache rank is already at capacity
-            if active_counts[best_cache_rank] < max_seqs:
-                return best_cache_rank
+        # Sort by cached tokens descending (most hits first)
+        rank_hits.sort(key=lambda x: x[0], reverse=True)
 
-        # Fallback: find rank with least active requests
+        # 2. Try to find a rank with hits that isn't full
+        for num_tokens, rank in rank_hits:
+            if num_tokens > 0 and active_counts[rank] < max_seqs:
+                return rank
+
+        # 3. Fallback: pick the rank with the least active requests
+        self.num_spilled_requests += 1
         return min(range(self.dp_size), key=lambda r: active_counts[r])
 
     def add_request(self, request: Request) -> None:
