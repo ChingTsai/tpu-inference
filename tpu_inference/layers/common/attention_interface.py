@@ -50,7 +50,10 @@ MAX_ALLOWED_PAGE_INDICES_N = (
 # NOTE: this kernel is experimental and not fully tested.  See
 # tpu-inference/tpu_inference/kernels/experimental/batched_rpa/wrapper.py
 # for details
-if envs.USE_BATCHED_RPA_KERNEL:
+if envs.USE_STACKED_RPA_KERNEL:
+    import tpu_inference.kernels.experimental.stacked_rpa.wrapper as rpa
+    logger.info_once("Using experimental stacked RPA kernel")
+elif envs.USE_BATCHED_RPA_KERNEL:
     import tpu_inference.kernels.experimental.batched_rpa.wrapper as rpa
     logger.info_once("Using experimental batched RPA kernel")
 else:
@@ -405,8 +408,12 @@ def sharded_ragged_paged_attention(
             v = jnp.repeat(v, factor, axis=1)
 
     qkv_spec = P(ShardingAxisName.ATTN_DATA, ShardingAxisName.ATTN_HEAD, None)
-    kv_cache_spec = P(ShardingAxisName.ATTN_DATA, None,
-                      ShardingAxisName.ATTN_HEAD, None, None)
+    if kv_cache.ndim == 4:
+        kv_cache_spec = P(ShardingAxisName.ATTN_DATA,
+                          ShardingAxisName.ATTN_HEAD, None, None)
+    else:
+        kv_cache_spec = P(ShardingAxisName.ATTN_DATA, None,
+                          ShardingAxisName.ATTN_HEAD, None, None)
     in_specs = (
         qkv_spec,  # q
         qkv_spec,  # k

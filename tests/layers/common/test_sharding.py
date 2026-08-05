@@ -120,6 +120,36 @@ class TestShardingConfigManager(unittest.TestCase):
         self.assertEqual(manager.total_dp_size, 2)  # 1 * 1 * 2
 
     @patch("tpu_inference.layers.common.sharding.envs.NEW_MODEL_DESIGN", True)
+    @patch("tpu_inference.layers.common.sharding.envs.USE_STACKED_RPA_KERNEL", True)
+    def test_sharding_config_manager_with_stacked_rpa_dp_attention(self):
+        vllm_config = MagicMock()
+        vllm_config.parallel_config.tensor_parallel_size = 8
+        vllm_config.parallel_config.data_parallel_size = 1
+        vllm_config.parallel_config.decode_context_parallel_size = 1
+        vllm_config.parallel_config.prefill_context_parallel_size = 1
+        vllm_config.model_config.use_mla = False
+        vllm_config.model_config.get_total_num_kv_heads.return_value = 2
+        vllm_config.speculative_config = None
+        vllm_config.lora_config = None
+        vllm_config.cache_config.cache_dtype = "bfloat16"
+
+        vllm_config.additional_config = {
+            "sharding": {
+                "sharding_strategy": {
+                    "enable_dp_attention": True,
+                }
+            }
+        }
+
+        manager = ShardingConfigManager.from_vllm_config(vllm_config)
+        # num_kv_heads = 2, stacked_rpa uses 4D SEQ_ALONG_LANE layout (unpacked)
+        # num_kv_heads_per_device_in_kv_cache = max(1, 2 * 2) = 4 (independent of packing=2)
+        # attn_dp = max(int(8 // 4), 1) = 2
+        # tensor_parallelism = 8 // 2 = 4
+        self.assertEqual(manager.tp_size, 4)
+        self.assertEqual(manager.attn_dp_size, 2)
+
+    @patch("tpu_inference.layers.common.sharding.envs.NEW_MODEL_DESIGN", True)
     def test_sharding_config_manager_with_dp_attention_expert_model(self):
         vllm_config = MagicMock()
         vllm_config.parallel_config.tensor_parallel_size = 8

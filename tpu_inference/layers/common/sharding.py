@@ -258,7 +258,8 @@ class ShardingConfigManager:
             # Use attention DP instead to reduce per-device num_kv_heads and
             # eliminate this waste.
 
-            if envs.USE_BATCHED_RPA_KERNEL and envs.USE_BATCHED_RPA_SEQ_ON_LANE:
+            if (envs.USE_BATCHED_RPA_KERNEL
+                    and envs.USE_BATCHED_RPA_SEQ_ON_LANE) or envs.USE_STACKED_RPA_KERNEL:
                 num_kv_heads_per_device_in_kv_cache = max(1, num_kv_heads * 2)
             else:
                 num_kv_heads_per_device_in_kv_cache = max(

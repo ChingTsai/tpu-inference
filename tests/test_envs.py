@@ -112,6 +112,11 @@ def test_boolean_env_vars(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("USE_BATCHED_RPA_KERNEL", "1")
     assert envs.USE_BATCHED_RPA_KERNEL is True
 
+    # Test USE_STACKED_RPA_KERNEL (default False)
+    assert envs.USE_STACKED_RPA_KERNEL is False
+    monkeypatch.setenv("USE_STACKED_RPA_KERNEL", "1")
+    assert envs.USE_STACKED_RPA_KERNEL is True
+
 
 def test_boolean_env_vars_string_values(monkeypatch: pytest.MonkeyPatch):
     """Test that boolean env vars accept string values like 'True' and 'False'"""

@@ -25,7 +25,9 @@ import tpu_inference.envs as envs
 import tpu_inference.kernels.mla.v2.kernel as mla
 import tpu_inference.kernels.ragged_paged_attention.v3.kernel_hd64 as rpa_hd64
 
-if envs.USE_BATCHED_RPA_KERNEL:
+if envs.USE_STACKED_RPA_KERNEL:
+    import tpu_inference.kernels.experimental.stacked_rpa.wrapper as rpa
+elif envs.USE_BATCHED_RPA_KERNEL:
     import tpu_inference.kernels.experimental.batched_rpa.wrapper as rpa
 else:
     import tpu_inference.kernels.ragged_paged_attention.v3.kernel as rpa
@@ -88,16 +90,27 @@ def get_kv_cache_shape_with_mesh(mesh: Mesh,
                 envs.MLA_KV_PACKING_SIZE,
                 transpose_kv_cache=envs.MLA_TRANSPOSE_KV_CACHE))
     else:
-        assert actual_num_kv_heads % model_cnt == 0
+        if actual_num_kv_heads < model_cnt:
+            assert model_cnt % actual_num_kv_heads == 0
+            effective_kv_heads = model_cnt
+        else:
+            assert actual_num_kv_heads % model_cnt == 0
+            effective_kv_heads = actual_num_kv_heads
+
         get_kv_cache_shape_fn = (
             rpa_hd64.get_kv_cache_shape if actual_head_dim == 64 \
                 else rpa.get_kv_cache_shape
         )
         shape = list(
             get_kv_cache_shape_fn(total_num_pages, physical_block_size,
-                                  actual_num_kv_heads // model_cnt,
+                                  effective_kv_heads // model_cnt,
                                   actual_head_dim, kv_dtype))
-        shape[2] *= model_cnt
+        if len(shape) == 4:
+            # 4D SEQ_ALONG_LANE layout: [num_blocks, num_kv_heads * 2, head_dim, page_size]
+            shape[1] *= model_cnt
+        else:
+            # 5D HEAD_ALONG_SUBLANE layout: [num_blocks, page_size, num_kv_heads // packing, packing, head_dim]
+            shape[2] *= model_cnt
     return tuple(shape)
 
 
@@ -160,6 +173,11 @@ def create_kv_caches(
         sharding = NamedSharding(
             mesh,
             PartitionSpec(ShardingAxisName.BATCH, ShardingAxisName.KV_CONTEXT))
+    elif len(cache_shape) == 4:
+        sharding = NamedSharding(
+            mesh,
+            PartitionSpec(ShardingAxisName.BATCH, ShardingAxisName.KV_HEAD, None,
+                          ShardingAxisName.KV_CONTEXT))
     else:
         sharding = NamedSharding(
             mesh,
